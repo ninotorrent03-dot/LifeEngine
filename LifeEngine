@@ -1,0 +1,475 @@
+import streamlit as st
+import datetime
+import pandas as pd
+import base64
+import uuid
+
+# ==============================================================================
+# 0. CONFIGURATION DE LA PAGE ET DESIGN GRAPHIQUE (UI / UX)
+# ==============================================================================
+st.set_page_config(
+    page_title="Life Engine", 
+    page_icon="☀️", 
+    layout="centered",
+    initial_sidebar_state="collapsed"
+)
+
+st.markdown("""
+    <style>
+    /* Design global propre, lumineux et motivant */
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 5rem;
+    }
+    
+    /* Style des métriques globales (Rank, LP, Séries) */
+    div[data-testid="metric-container"] {
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+        padding: 15px;
+        border-radius: 14px;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        text-align: center;
+    }
+    div[data-testid="metric-container"] label {
+        color: #64748b !important;
+        font-size: 0.85rem !important;
+        font-weight: 600;
+    }
+    div[data-testid="metric-container"] div[data-testid="stMetricValue"] {
+        color: #2563eb !important;
+        font-size: 1.6rem !important;
+        font-weight: 900;
+    }
+    
+    /* Boutons stylisés pour le tactile */
+    .stButton>button {
+        border-radius: 10px;
+        font-weight: bold;
+        width: 100%;
+        padding: 10px 0;
+        border: 1px solid #cbd5e1;
+        background-color: #ffffff;
+        color: #1e293b;
+        transition: all 0.2s ease;
+    }
+    .stButton>button:active {
+        background-color: #2563eb;
+        color: white;
+        transform: scale(0.98);
+    }
+    
+    /* Onglets de navigation */
+    .stTabs [data-baseweb="tab-list"] {
+        background-color: #f1f5f9;
+        border-radius: 12px;
+        padding: 6px;
+        gap: 4px;
+        justify-content: center;
+    }
+    .stTabs [data-baseweb="tab"] {
+        color: #475569;
+        border-radius: 8px;
+        font-weight: 600;
+        padding: 8px 12px;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #ffffff !important;
+        color: #2563eb !important;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# ==============================================================================
+# 1. INITIALISATION DU MOTEUR DE DONNÉES (SESSION STATE)
+# ==============================================================================
+today = datetime.date.today()
+today_str = str(today)
+
+if 'total_lp' not in st.session_state: 
+    st.session_state.total_lp = 0
+if 'streak' not in st.session_state: 
+    st.session_state.streak = 0
+if 'last_reset_date' not in st.session_state: 
+    st.session_state.last_reset_date = today
+
+# Listes d'historiques pour les graphiques et le suivi
+if 'habit_history' not in st.session_state: 
+    st.session_state.habit_history = []
+if 'muscle_history' not in st.session_state: 
+    st.session_state.muscle_history = []
+if 'intellect_history' not in st.session_state: 
+    st.session_state.intellect_history = []
+if 'creative_history' not in st.session_state: 
+    st.session_state.creative_history = []
+
+# Page blanche au démarrage pour les habitudes (totalement modulable)
+if 'habits_list' not in st.session_state: 
+    st.session_state.habits_list = []
+
+# Base de données complète de tous les exercices de musculation existants
+MUSCLES_DB = {
+    "Jambes & Fessiers": {
+        "Quadriceps": ["Squat barre", "Front Squat", "Presse à cuisses", "Hack Squat", "Leg Extension", "Fentes bulgares", "Goblet Squat", "Sissy Squat"],
+        "Ischio-jambiers": ["Soulevé de terre roumain (RDL)", "Soulevé de terre jambes tendues", "Leg Curl assis", "Leg Curl allongé", "Leg Curl debout"],
+        "Fessiers": ["Hip Thrust", "Glute Bridge", "Soulevé de terre sumo", "Kickback poulie", "Abduction machine"],
+        "Mollets": ["Extensions debout", "Mollets à la presse", "Extensions assis"]
+    },
+    "Dos": {
+        "Largeur (Grand Dorsal)": ["Tractions pronation", "Tractions supination", "Tirage vertical poulie haute", "Pull-over poulie", "Pull-over haltère"],
+        "Épaisseur (Trapèzes/Rhomboïdes)": ["Rowing barre buste penché", "Rowing haltère (Bûcheron)", "Rowing T-Bar", "Tirage horizontal poulie basse", "Seal Row", "Shrugs", "Face Pull"],
+        "Lombaires": ["Extensions au banc", "Soulevé de terre classique", "Superman"]
+    },
+    "Pectoraux": {
+        "Haut (Claviculaire)": ["Développé Incliné barre", "Développé Incliné haltères", "Développé Incliné machine", "Écartés inclinés"],
+        "Milieu (Sternal)": ["Développé Couché barre", "Développé Couché haltères", "Développé machine (Chest Press)", "Pec Deck (Machine)"],
+        "Bas (Costal)": ["Développé Décliné", "Dips (buste penché)", "Écartés poulie haute (Vis-à-vis)"]
+    },
+    "Épaules": {
+        "Avant (Antérieur)": ["Développé Militaire", "Développé haltères assis", "Élévations frontales"],
+        "Côté (Latéral)": ["Élévations latérales haltères", "Élévations latérales poulie", "Élévations latérales machine", "Tirage menton"],
+        "Arrière (Postérieur)": ["Oiseau haltères", "Oiseau poulie", "Peck Deck inversé", "Face Pull"]
+    },
+    "Bras": {
+        "Biceps": ["Curl barre droite", "Curl barre EZ", "Curl haltères alterné", "Curl pupitre (Preacher)", "Curl incliné", "Curl poulie basse"],
+        "Brachial (Avant-bras)": ["Curl Marteau haltères", "Curl Marteau corde", "Curl inversé barre"],
+        "Triceps": ["Barre au front", "Extension poulie haute corde", "Extension poulie haute barre", "Dips (buste droit)", "Kickback haltère"]
+    },
+    "Abdominaux & Gainage": {
+        "Grand Droit": ["Crunch au sol", "Crunch poulie", "Relevé de jambes suspendu", "Relevé de bassin", "Machine à abdos", "Roue abdominale (Ab Wheel)"],
+        "Obliques": ["Russian Twist", "Woodchopper poulie", "Planche latérale"],
+        "Transverse": ["Planche classique", "Planche lestée", "Vacuum", "Dead bug"]
+    }
+}
+
+# Logique de réinitialisation quotidienne des tâches journalières
+if st.session_state.last_reset_date != today:
+    for h in st.session_state.habits_list: 
+        h["value"] = 0 if h["type"] == "Compteur" else False
+    st.session_state.last_reset_date = today
+
+# ==============================================================================
+# 2. SYSTÈME DE RANKINGS ET GESTION DU BODYGRAPH SVG
+# ==============================================================================
+def get_rank(points):
+    # Les 40 niveaux de classement global (Régularité)
+    ranks = [
+        (0, "Fer IV"), (100, "Fer III"), (200, "Fer II"), (300, "Fer I"),
+        (400, "Bronze IV"), (500, "Bronze III"), (600, "Bronze II"), (800, "Bronze I"),
+        (1000, "Argent IV"), (1200, "Argent III"), (1400, "Argent II"), (1700, "Argent I"),
+        (2000, "Or IV"), (2400, "Or III"), (2800, "Or II"), (3300, "Or I"),
+        (3800, "Platine IV"), (4400, "Platine III"), (5000, "Platine II"), (5800, "Platine I"),
+        (6600, "Émeraude IV"), (7500, "Émeraude III"), (8500, "Émeraude II"), (9600, "Émeraude I"),
+        (11000, "Diamant IV"), (12500, "Diamant III"), (14500, "Diamant II"), (17000, "Diamant I"),
+        (20000, "Maître IV"), (23000, "Maître III"), (26000, "Maître II"), (30000, "Maître I"),
+        (35000, "Grand Maître IV"), (40000, "Grand Maître III"), (46000, "Grand Maître II"), (53000, "Grand Maître I"),
+        (60000, "Challenger IV"), (70000, "Challenger III"), (85000, "Challenger II"), (100000, "Challenger I")
+    ]
+    for i in range(len(ranks)):
+        if points < ranks[i][0]: 
+            return ranks[i-1][1], ranks[i][0]
+    return ranks[-1][1], points
+
+def get_muscle_color(weight, muscle_zone):
+    """Détermine la couleur du muscle sur le bodygraph en fonction du poids max (PR)"""
+    if weight <= 0: 
+        return "#e2e8f0" # Non entraîné (Gris clair)
+        
+    heavy_tiers = [20, 40, 60, 80, 100, 120, 140, 160] 
+    medium_tiers = [15, 30, 45, 60, 75, 90, 105, 120] 
+    small_tiers = [6, 12, 18, 24, 30, 36, 42, 50] 
+    
+    tiers = heavy_tiers if muscle_zone in ["Quadriceps", "Ischio-jambiers", "Fessiers", "Lombaires", "Pecs Milieu"] else (medium_tiers if muscle_zone in ["Pecs Haut", "Pecs Bas", "Grand Dorsal", "Trapèzes", "Épaules (Avant)"] else small_tiers)
+    
+    if weight < tiers[1]: return "#94a3b8" # Fer
+    elif weight < tiers[2]: return "#b45309" # Bronze
+    elif weight < tiers[3]: return "#94a3b8" # Argent
+    elif weight < tiers[4]: return "#fbbf24" # Or
+    elif weight < tiers[5]: return "#2dd4bf" # Platine
+    elif weight < tiers[6]: return "#34d399" # Émeraude
+    elif weight < tiers[7]: return "#60a5fa" # Diamant
+    else: return "#f43f5e" # Master/Challenger
+
+def render_svg_bodygraph(muscle_max_dict):
+    """Génère le code SVG complet et l'encode en Base64 pour un affichage visuel parfait"""
+    def c(m): return get_muscle_color(muscle_max_dict.get(m, 0), m)
+    
+    svg_content = f"""<svg width="400" height="350" viewBox="0 0 400 350" xmlns="http://www.w3.org/2000/svg">
+    <style>
+        .m {{ stroke: #cbd5e1; stroke-width: 1.5px; stroke-linejoin: round; }}
+        .lbl {{ fill: #64748b; font-family: sans-serif; font-size: 14px; font-weight: bold; text-anchor: middle; }}
+    </style>
+    <g id="front">
+        <g id="f_l">
+            <polygon class="m" fill="{c('Trapèzes')}" points="100,48 90,48 85,58 100,58"/>
+            <polygon class="m" fill="{c('Épaules (Avant)')}" points="83,58 60,65 55,90 70,90"/>
+            <polygon class="m" fill="{c('Pecs Haut')}" points="100,60 72,60 70,72 100,72"/>
+            <polygon class="m" fill="{c('Pecs Milieu')}" points="100,74 68,74 68,88 100,88"/>
+            <polygon class="m" fill="{c('Pecs Bas')}" points="100,90 69,90 76,102 100,102"/>
+            <polygon class="m" fill="{c('Abdominaux')}" points="100,105 87,105 87,118 100,118"/>
+            <polygon class="m" fill="{c('Abdominaux')}" points="100,120 87,120 87,133 100,133"/>
+            <polygon class="m" fill="{c('Abdominaux')}" points="100,135 87,135 87,150 100,150"/>
+            <polygon class="m" fill="{c('Obliques')}" points="85,105 72,105 76,140 85,150"/>
+            <polygon class="m" fill="{c('Biceps')}" points="68,92 53,92 48,135 60,135"/>
+            <polygon class="m" fill="{c('Avant-bras')}" points="58,138 45,138 35,185 50,185"/>
+            <polygon class="m" fill="{c('Quadriceps')}" points="83,155 65,155 60,240 75,240"/>
+            <polygon class="m" fill="{c('Quadriceps')}" points="100,155 85,155 77,240 100,240"/>
+            <polygon class="m" fill="{c('Mollets Face')}" points="85,250 68,250 72,310 85,310"/>
+        </g>
+        <g id="f_r" transform="translate(200, 0) scale(-1, 1)">
+            <polygon class="m" fill="{c('Trapèzes')}" points="100,48 90,48 85,58 100,58"/>
+            <polygon class="m" fill="{c('Épaules (Avant)')}" points="83,58 60,65 55,90 70,90"/>
+            <polygon class="m" fill="{c('Pecs Haut')}" points="100,60 72,60 70,72 100,72"/>
+            <polygon class="m" fill="{c('Pecs Milieu')}" points="100,74 68,74 68,88 100,88"/>
+            <polygon class="m" fill="{c('Pecs Bas')}" points="100,90 69,90 76,102 100,102"/>
+            <polygon class="m" fill="{c('Abdominaux')}" points="100,105 87,105 87,118 100,118"/>
+            <polygon class="m" fill="{c('Abdominaux')}" points="100,120 87,120 87,133 100,133"/>
+            <polygon class="m" fill="{c('Abdominaux')}" points="100,135 87,135 87,150 100,150"/>
+            <polygon class="m" fill="{c('Obliques')}" points="85,105 72,105 76,140 85,150"/>
+            <polygon class="m" fill="{c('Biceps')}" points="68,92 53,92 48,135 60,135"/>
+            <polygon class="m" fill="{c('Avant-bras')}" points="58,138 45,138 35,185 50,185"/>
+            <polygon class="m" fill="{c('Quadriceps')}" points="83,155 65,155 60,240 75,240"/>
+            <polygon class="m" fill="{c('Quadriceps')}" points="100,155 85,155 77,240 100,240"/>
+            <polygon class="m" fill="{c('Mollets Face')}" points="85,250 68,250 72,310 85,310"/>
+        </g>
+    </g>
+    <circle cx="100" cy="28" r="18" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="2"/>
+    <text class="lbl" x="100" y="340">FACE</text>
+    <g id="back">
+        <g id="b_l">
+            <polygon class="m" fill="{c('Trapèzes')}" points="300,48 280,55 278,65 300,75"/>
+            <polygon class="m" fill="{c('Trapèzes')}" points="300,77 275,77 300,110"/>
+            <polygon class="m" fill="{c('Épaules (Arrière)')}" points="275,58 255,65 250,85 265,85"/>
+            <polygon class="m" fill="{c('Grand Dorsal')}" points="273,80 250,90 260,140 290,140 290,112"/>
+            <polygon class="m" fill="{c('Lombaires')}" points="300,115 285,148 300,148"/>
+            <polygon class="m" fill="{c('Triceps')}" points="263,87 245,87 240,135 258,135"/>
+            <polygon class="m" fill="{c('Avant-bras Dos')}" points="256,138 238,138 230,185 245,185"/>
+            <polygon class="m" fill="{c('Fessiers')}" points="300,150 270,150 265,190 300,195"/>
+            <polygon class="m" fill="{c('Ischio-jambiers')}" points="298,198 268,192 270,245 295,245"/>
+            <polygon class="m" fill="{c('Mollets Dos')}" points="293,250 265,250 270,310 288,310"/>
+        </g>
+        <g id="b_r" transform="translate(600, 0) scale(-1, 1)">
+            <polygon class="m" fill="{c('Trapèzes')}" points="300,48 280,55 278,65 300,75"/>
+            <polygon class="m" fill="{c('Trapèzes')}" points="300,77 275,77 300,110"/>
+            <polygon class="m" fill="{c('Épaules (Arrière)')}" points="275,58 255,65 250,85 265,85"/>
+            <polygon class="m" fill="{c('Grand Dorsal')}" points="273,80 250,90 260,140 290,140 290,112"/>
+            <polygon class="m" fill="{c('Lombaires')}" points="300,115 285,148 300,148"/>
+            <polygon class="m" fill="{c('Triceps')}" points="263,87 245,87 240,135 258,135"/>
+            <polygon class="m" fill="{c('Avant-bras Dos')}" points="256,138 238,138 230,185 245,185"/>
+            <polygon class="m" fill="{c('Fessiers')}" points="300,150 270,150 265,190 300,195"/>
+            <polygon class="m" fill="{c('Ischio-jambiers')}" points="298,198 268,192 270,245 295,245"/>
+            <polygon class="m" fill="{c('Mollets Dos')}" points="293,250 265,250 270,310 288,310"/>
+        </g>
+    </g>
+    <circle cx="300" cy="28" r="18" fill="#e2e8f0" stroke="#cbd5e1" stroke-width="2"/>
+    <text class="lbl" x="300" y="340">DOS</text>
+    </svg>"""
+    
+    b64_encoded = base64.b64encode(svg_content.encode('utf-8')).decode("utf-8")
+    return f'<div style="text-align:center;"><img src="data:image/svg+xml;base64,{b64_encoded}" width="100%" style="max-width:380px;"></div>'
+
+# ==============================================================================
+# 3. INTERFACE VISUELLE ET NAVIGATION (5 ONGLETS)
+# ==============================================================================
+st.markdown("<h2 style='text-align: center; color: #1e293b;'>☀️ Life Engine</h2>", unsafe_allow_html=True)
+
+rank_name, next_tier = get_rank(st.session_state.total_lp)
+col_m1, col_m2, col_m3 = st.columns(3)
+col_m1.metric("Rank Global", rank_name)
+col_m2.metric("Total LP", st.session_state.total_lp)
+col_m3.metric("Série 🔥", f"{st.session_state.streak} j")
+st.progress(min(st.session_state.total_lp / next_tier, 1.0) if next_tier > 0 else 1.0)
+st.write("")
+
+# Création des 5 onglets demandés
+tabs = st.tabs(["🌱 Hygiène", "🏋️ Muscu", "🧠 Intellect", "🎨 Créatif", "📈 Stats"])
+
+# ------------------------------------------------------------------------------
+# ONGLET 1 : HYGIÈNE (100% BLANC ET MODULABLE)
+# ------------------------------------------------------------------------------
+with tabs[0]:
+    st.markdown("### 📋 Mes Habitudes & Survie")
+    
+    if len(st.session_state.habits_list) == 0:
+        st.info("Ta liste est vide pour l'instant. Utilise le formulaire ci-dessous pour ajouter tes propres routines (brossage de dents, gouttière, eau, etc.).")
+        
+    for index, habit_item in enumerate(st.session_state.habits_list):
+        col_widget, col_delete = st.columns([5, 1])
+        
+        with col_widget:
+            if habit_item["type"] == "Case à cocher":
+                is_checked = st.checkbox(f"{habit_item['name']} (+{habit_item['lp']} LP)", value=habit_item["value"], key=f"chk_{habit_item['id']}")
+                if is_checked != habit_item["value"]:
+                    habit_item["value"] = is_checked
+                    st.session_state.total_lp += habit_item["lp"] if is_checked else -habit_item["lp"]
+                    st.session_state.habit_history.append({"date": today_str, "habit": habit_item['name'], "value": 1 if is_checked else 0})
+                    st.rerun()
+                    
+            elif habit_item["type"] == "Compteur":
+                st.write(f"**{habit_item['name']}** ({habit_item['value']} / {habit_item['target']})")
+                btn_minus, btn_plus, _space = st.columns([1, 1, 3])
+                
+                if btn_minus.button("➖", key=f"minus_{habit_item['id']}"):
+                    if habit_item["value"] > 0:
+                        habit_item["value"] = max(0, habit_item["value"] - habit_item["step"])
+                        st.session_state.total_lp -= habit_item["lp"]
+                        st.rerun()
+                        
+                if btn_plus.button("➕", key=f"plus_{habit_item['id']}"):
+                    habit_item["value"] += habit_item["step"]
+                    st.session_state.total_lp += habit_item["lp"]
+                    st.session_state.habit_history.append({"date": today_str, "habit": habit_item['name'], "value": habit_item['value']})
+                    st.rerun()
+                    
+        with col_delete:
+            if st.button("🗑️", key=f"delete_{habit_item['id']}"):
+                st.session_state.habits_list.pop(index)
+                st.rerun()
+                
+    st.divider()
+    
+    with st.expander("✨ Créer / Ajouter une nouvelle habitude"):
+        with st.form("creation_form_habit"):
+            input_name = st.text_input("Nom de l'habitude (ex: Brossage de dents, Gouttière, Boire de l'eau)")
+            input_type = st.radio("Format", ["Case à cocher", "Compteur"])
+            input_lp = st.number_input("Points LP rapportés par validation", min_value=1, value=10)
+            
+            target_val, step_val = 1, 1
+            if input_type == "Compteur":
+                col_t, col_s = st.columns(2)
+                with col_t: target_val = st.number_input("Objectif journalier", min_value=1, value=3)
+                with col_s: step_val = st.number_input("Incrément par clic (+)", min_value=1, value=1)
+                
+            if st.form_submit_button("Ajouter à mon moteur"):
+                if input_name:
+                    st.session_state.habits_list.append({
+                        "id": str(uuid.uuid4()),
+                        "name": input_name,
+                        "type": input_type,
+                        "lp": input_lp,
+                        "target": target_val,
+                        "step": step_val,
+                        "value": 0 if input_type == "Compteur" else False
+                    })
+                    st.rerun()
+
+# ------------------------------------------------------------------------------
+# ONGLET 2 : MUSCULATION (MOTEUR DE PUISSANCE & BODYGRAPH)
+# ------------------------------------------------------------------------------
+with tabs[1]:
+    st.markdown("### 🗺️ Power Bodygraph")
+    
+    muscle_mapping_svg = {
+        "Haut (Claviculaire)": "Pecs Haut", "Milieu (Sternal)": "Pecs Milieu", "Bas (Costal)": "Pecs Bas", 
+        "Largeur (Grand Dorsal)": "Grand Dorsal", "Épaisseur (Trapèzes/Rhomboïdes)": "Trapèzes", "Lombaires": "Lombaires", 
+        "Quadriceps": "Quadriceps", "Ischio-jambiers": "Ischio-jambiers", "Fessiers": "Fessiers", "Mollets": "Mollets Face", 
+        "Avant (Antérieur)": "Épaules (Avant)", "Côté (Latéral)": "Épaules (Avant)", "Arrière (Postérieur)": "Épaules (Arrière)", 
+        "Biceps": "Biceps", "Brachial (Avant-bras)": "Avant-bras", "Triceps": "Triceps", "Grand Droit": "Abdominaux", "Obliques": "Obliques"
+    }
+    
+    peak_weights_dict = {}
+    for entry in st.session_state.muscle_history:
+        svg_zone = muscle_mapping_svg.get(entry.get("muscle", ""), "")
+        if svg_zone and entry.get("weight", 0) > peak_weights_dict.get(svg_zone, 0):
+            peak_weights_dict[svg_zone] = entry["weight"]
+
+    # Affichage du schéma corporel sous forme d'image SVG propre
+    st.markdown(render_svg_bodygraph(peak_weights_dict), unsafe_allow_html=True)
+    st.divider()
+
+    st.markdown("### 🏋️ Enregistrer une performance")
+    selected_group = st.selectbox("Groupe Musculaire Principal", list(MUSCLES_DB.keys()))
+    selected_muscle = st.selectbox("Faisceau Cible", list(MUSCLES_DB[selected_group].keys()))
+    selected_exercise = st.selectbox("Exercice", MUSCLES_DB[selected_group][selected_muscle])
+    
+    col_w, col_r = st.columns(2)
+    with col_w: input_weight = st.number_input("Poids sur la barre (kg)", min_value=0.0, step=1.0)
+    with col_r: input_reps = st.number_input("Répétitions validées", min_value=0, step=1)
+    
+    if st.button("Valider la série et analyser le PR 🔥", use_container_width=True):
+        if input_weight > 0:
+            st.session_state.muscle_history.append({
+                "date": today_str,
+                "muscle": selected_muscle,
+                "exo": selected_exercise,
+                "weight": input_weight,
+                "reps": input_reps
+            })
+            st.session_state.total_lp += 20 # Bonus de régularité globale
+            st.toast("Performance enregistrée avec succès !", icon="💪")
+            st.rerun()
+
+# ------------------------------------------------------------------------------
+# ONGLET 3 : INTELLECT & ÉTUDES (ÉCO-GESTION, PYTHON...)
+# ------------------------------------------------------------------------------
+with tabs[2]:
+    st.markdown("### 🧠 Productivité & Études")
+    st.write("Suivi de tes révisions d'Éco-Gestion, de ton code Python ou de tes projets.")
+    
+    with st.form("intellect_form_data"):
+        field_subject = st.selectbox("Domaine d'activité", ["Économie & Gestion", "Développement Python", "Recherche de stage/emploi", "Langues", "Autre"])
+        field_details = st.text_input("Sujet précis (ex: Chapitre 3 Micro, Script Streamlit)")
+        field_lp = st.slider("Points LP mérités par l'effort", 10, 100, 30)
+        
+        if st.form_submit_button("Enregistrer la session intellectuelle 📚"):
+            if field_details:
+                st.session_state.intellect_history.append({"date": today_str, "subject": field_subject, "desc": field_details})
+                st.session_state.total_lp += field_lp
+                st.toast("Session validée ! Cerveau mis à jour.", icon="🧠")
+                st.rerun()
+                
+    if st.session_state.intellect_history:
+        st.markdown("**Historique récent :**")
+        df_intellect = pd.DataFrame(st.session_state.intellect_history)
+        st.dataframe(df_intellect.tail(3).iloc[::-1], hide_index=True)
+
+# ------------------------------------------------------------------------------
+# ONGLET 4 : CRÉATIF & SOCIAL
+# ------------------------------------------------------------------------------
+with tabs[3]:
+    st.markdown("### 🎨 Art, Flow & Social")
+    st.write("Écriture de textes de rap, prods musicales, moments entre amis (Liam, etc.).")
+    
+    with st.form("creative_form_data"):
+        creative_title = st.text_input("Activité réalisée (ex: Écriture 16 mesures, Sortie avec Liam)")
+        creative_lp = st.slider("LP accordés", 10, 100, 20)
+        
+        if st.form_submit_button("Enregistrer l'activité créative ✨"):
+            if creative_title:
+                st.session_state.creative_history.append({"date": today_str, "title": creative_title})
+                st.session_state.total_lp += creative_lp
+                st.toast("Créativité validée !", icon="✨")
+                st.rerun()
+                
+    if st.session_state.creative_history:
+        st.markdown("**Dernières actions créatives :**")
+        df_creative = pd.DataFrame(st.session_state.creative_history)
+        st.dataframe(df_creative.tail(3).iloc[::-1], hide_index=True)
+
+# ------------------------------------------------------------------------------
+# ONGLET 5 : STATISTIQUES & GRAPHIQUES D'ÉVOLUTION
+# ------------------------------------------------------------------------------
+with tabs[4]:
+    st.markdown("### 📊 Analyse de Progression")
+    stats_mode = st.radio("Sélectionner la métrique :", ["Habitudes", "Musculation (PR en kg)"], horizontal=True)
+    st.write("")
+    
+    if stats_mode == "Habitudes":
+        if not st.session_state.habit_history:
+            st.warning("Aucune donnée d'habitude enregistrée pour le moment.")
+        else:
+            df_habits_stats = pd.DataFrame(st.session_state.habit_history)
+            chosen_habit = st.selectbox("Choisir l'habitude à analyser :", df_habits_stats['habit'].unique())
+            chart_series = df_habits_stats[df_habits_stats['habit'] == chosen_habit].groupby('date')['value'].max()
+            st.line_chart(chart_series)
+
+    elif stats_mode == "Musculation (PR en kg)":
+        if not st.session_state.muscle_history:
+            st.warning("Aucune série de musculation enregistrée.")
+        else:
+            df_muscu_stats = pd.DataFrame(st.session_state.muscle_history)
+            chosen_exercise = st.selectbox("Choisir l'exercice :", df_muscu_stats['exo'].unique())
+            chart_weights = df_muscu_stats[df_muscu_stats['exo'] == chosen_exercise].groupby('date')['weight'].max()
+            st.bar_chart(chart_weights)
+            st.success(f"🏆 Record absolu atteint sur cet exercice : **{chart_weights.max()} kg**.")
